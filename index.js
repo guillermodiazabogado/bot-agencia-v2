@@ -469,7 +469,6 @@ Formatos válidos:
   return validarIntencion(json);
 }
 
-function validarIntencion(intencion) {
   if (!intencion || typeof intencion !== 'object') {
     throw new Error('La intención no es un objeto válido');
   }
