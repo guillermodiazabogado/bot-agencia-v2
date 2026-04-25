@@ -8,7 +8,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
-    "dotenv": "^17.2.3",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "googleapis": "^126.0.0",
     "node-cron": "^4.2.1",
     "node-telegram-bot-api": "^0.66.0",
@@ -19,5 +20,3 @@
   },
   "license": "ISC"
 }
-
-
