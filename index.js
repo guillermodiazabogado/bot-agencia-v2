@@ -43,18 +43,51 @@ app.get('/webhook', (req, res) => {
 
 
   if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    console.log('Webhook de WhatsApp verificado');
-    return res.status(200).send(challenge);
+    console.log("Webhook verificado");
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
   }
-
-
-  return res.sendStatus(403);
 });
 
 
-app.post('/webhook', (req, res) => {
+app.post('/webhook', async (req, res) => {
   console.log('Mensaje WhatsApp recibido:', JSON.stringify(req.body, null, 2));
-  return res.sendStatus(200);
+
+  try {
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const message = value?.messages?.[0];
+
+    if (!message) {
+      return res.sendStatus(200);
+    }
+
+    const from = message.from;
+    const textoRecibido = message.text?.body || 'Mensaje recibido';
+
+    await fetch(`https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: from,
+        type: 'text',
+        text: {
+          body: `Hola 👋 recibí tu mensaje: "${textoRecibido}"`,
+        },
+      }),
+    });
+
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error('Error respondiendo WhatsApp:', error);
+    return res.sendStatus(500);
+  }
 });
 
 
