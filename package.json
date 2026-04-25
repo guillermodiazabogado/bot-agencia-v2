@@ -1,0 +1,21 @@
+{
+  "name": "bot-agenda-v2",
+  "version": "1.0.0",
+  "description": "Bot de Telegram para agenda, Asana y Google Calendar",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "dotenv": "^17.2.3",
+    "googleapis": "^169.0.0",
+    "node-cron": "^4.2.1",
+    "node-telegram-bot-api": "^0.66.0",
+    "openai": "^6.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "ISC"
+}
