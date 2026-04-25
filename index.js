@@ -9,12 +9,18 @@ const cron = require('node-cron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const express = require('express');
 
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 
 
 const ASANA_TOKEN = process.env.ASANA_TOKEN;
@@ -24,78 +30,6 @@ const ASANA_NOTIFY_SECTION_GID = process.env.ASANA_NOTIFY_SECTION_GID;
 
 const HORA_RESUMEN = process.env.HORA_RESUMEN || '07:30';
 const CALENDAR_TIMEZONE = 'America/Argentina/Buenos_Aires';
-const SCOPES = ['https://www.googleapis.com/auth/calendar'];
-
-const express = require('express');
-
-
-const app = express();
-app.use(express.json());
-
-
-app.get('/webhook', (req, res) => {
-  const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
-
-
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-
-  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    console.log("Webhook verificado");
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
-});
-
-
-app.post('/webhook', async (req, res) => {
-  console.log('Mensaje WhatsApp recibido:', JSON.stringify(req.body, null, 2));
-
-  try {
-    const entry = req.body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const message = value?.messages?.[0];
-
-    if (!message) {
-      return res.sendStatus(200);
-    }
-
-    const from = message.from;
-    const textoRecibido = message.text?.body || 'Mensaje recibido';
-
-    await fetch(`https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: from,
-        type: 'text',
-        text: {
-          body: `Hola 👋 recibí tu mensaje: "${textoRecibido}"`,
-        },
-      }),
-    });
-
-    return res.sendStatus(200);
-  } catch (error) {
-    console.error('Error respondiendo WhatsApp:', error);
-    return res.sendStatus(500);
-  }
-});
-
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Servidor webhook escuchando en puerto ${PORT}`);
-});
-
 
 
 if (!TELEGRAM_TOKEN) throw new Error('Falta TELEGRAM_TOKEN');
@@ -103,9 +37,21 @@ if (!OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY');
 if (!ANTHROPIC_API_KEY) throw new Error('Falta ANTHROPIC_API_KEY');
 
 
+const app = express();
+app.use(express.json({ limit: '25mb' }));
+
+
+const PORT = process.env.PORT || 3000;
+
+
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const claude = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+
+
+// =========================
+// UTILIDADES
+// =========================
 
 
 function escapeHtml(text = '') {
@@ -114,6 +60,14 @@ function escapeHtml(text = '') {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+
+function limpiarHtmlParaWhatsApp(text = '') {
+  return String(text)
+    .replace(/<b>/g, '*')
+    .replace(/<\/b>/g, '*')
+    .replace(/<[^>]*>/g, '');
 }
 
 
@@ -259,6 +213,11 @@ function leerJsonDesdeEnvONombre(envName, filePath) {
 
   throw new Error(`Falta ${envName} o archivo ${filePath}`);
 }
+
+
+// =========================
+// GOOGLE CALENDAR
+// =========================
 
 
 async function getCalendarClient() {
@@ -489,7 +448,12 @@ async function crearEvento(calendar, tarea) {
 }
 
 
-async function crearTareaAsana(tarea) {
+// =========================
+// ASANA
+// =========================
+
+
+async function crearTareaAsana(tarea, origen = 'Bot') {
   if (!ASANA_TOKEN || !ASANA_PROJECT_GID) {
     console.log('Asana no configurado para creación');
     return null;
@@ -504,7 +468,7 @@ async function crearTareaAsana(tarea) {
         `Fecha: ${tarea.fecha}`,
         `Hora: ${tarea.hora || 'Sin hora asignada'}`,
         `Duración: ${tarea.duracionMin || 60} min`,
-        'Origen: Bot Telegram',
+        `Origen: ${origen}`,
       ].join('\n'),
       projects: [ASANA_PROJECT_GID],
     },
@@ -581,6 +545,11 @@ function formatearTareasAsanaHtml(tareas) {
 }
 
 
+// =========================
+// IA CLASIFICADORA
+// =========================
+
+
 async function clasificarMensaje(texto) {
   const hoyTexto = new Date().toLocaleDateString('es-AR', {
     weekday: 'long',
@@ -616,6 +585,9 @@ Reglas:
 - Si falta fecha, devolvé tipo "error".
 - Si no menciona duración, usar 60 minutos.
 - Interpretá referencias como hoy, mañana, pasado mañana, este viernes, el lunes, la semana que viene.
+- Si el usuario pide agenda de hoy, devolvé tipo "hoy".
+- Si pide agenda de un día específico, devolvé tipo "dia".
+- Si pide agenda semanal o próximos días, devolvé tipo "semana".
 - Respondé SOLO JSON válido.
 - No agregues texto antes ni después.
 - No uses markdown.
@@ -649,6 +621,86 @@ Formatos válidos:
 }
 
 
+// =========================
+// PROCESADOR CENTRAL
+// =========================
+
+
+async function procesarTextoAgenda(texto, origen = 'Bot') {
+  const intencion = await clasificarMensaje(texto);
+
+
+  if (intencion.tipo === 'error') {
+    return `❌ ${intencion.motivo}`;
+  }
+
+
+  if (intencion.tipo === 'agendar') {
+    let evento = null;
+
+
+    if (intencion.hora) {
+      const calendar = await getCalendarClient();
+      evento = await crearEvento(calendar, intencion);
+    }
+
+
+    let tareaAsana = null;
+
+
+    try {
+      tareaAsana = await crearTareaAsana(intencion, origen);
+    } catch (e) {
+      console.error('Error creando tarea en Asana:', e.message);
+    }
+
+
+    return `
+✅ Registrado
+
+
+📌 ${intencion.titulo}
+📅 ${intencion.fecha}
+${intencion.hora ? `🕐 ${intencion.hora}hs` : '🕐 Sin hora asignada'}
+${intencion.hora ? `⏱️ ${intencion.duracionMin || 60} min` : ''}
+${intencion.descripcion ? `📝 ${intencion.descripcion}` : ''}
+
+
+${evento ? `📅 Google Calendar: creado correctamente\n${evento.calendarLink || ''}` : '📅 Google Calendar: no se creó porque no tenía hora'}
+
+
+${tareaAsana ? '🗂️ Tarea creada en Asana' : '⚠️ No se creó en Asana'}
+    `.trim();
+  }
+
+
+  const calendar = await getCalendarClient();
+
+
+  if (intencion.tipo === 'hoy') {
+    return await agendaHoy(calendar);
+  }
+
+
+  if (intencion.tipo === 'dia') {
+    return await agendaDia(calendar, intencion.fecha);
+  }
+
+
+  if (intencion.tipo === 'semana') {
+    return await agendaSemana(calendar);
+  }
+
+
+  return 'No pude procesar eso.';
+}
+
+
+// =========================
+// TELEGRAM AUDIO
+// =========================
+
+
 async function descargarArchivoTelegram(filePath) {
   const url = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
   const res = await fetch(url);
@@ -673,7 +725,7 @@ async function transcribirAudioTelegram(fileId) {
 
 
   const buffer = await descargarArchivoTelegram(fileInfo.file_path);
-  const tmpPath = path.join(os.tmpdir(), `audio_${Date.now()}.ogg`);
+  const tmpPath = path.join(os.tmpdir(), `telegram_audio_${Date.now()}.ogg`);
 
 
   fs.writeFileSync(tmpPath, buffer);
@@ -696,9 +748,262 @@ async function transcribirAudioTelegram(fileId) {
 }
 
 
+// =========================
+// WHATSAPP
+// =========================
+
+
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+
+  if (mode === 'subscribe' && token === WHATSAPP_VERIFY_TOKEN) {
+    console.log('Webhook WhatsApp verificado');
+    return res.status(200).send(challenge);
+  }
+
+
+  return res.sendStatus(403);
+});
+
+
+app.post('/webhook', async (req, res) => {
+  res.sendStatus(200);
+
+
+  console.log('Mensaje WhatsApp recibido:', JSON.stringify(req.body, null, 2));
+
+
+  try {
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const message = value?.messages?.[0];
+
+
+    if (!message) return;
+
+
+    const from = message.from;
+    let texto = '';
+
+
+    if (message.type === 'text') {
+      texto = limpiarTexto(message.text?.body || '');
+      console.log('Texto WhatsApp:', texto);
+    }
+
+
+    if (message.type === 'audio') {
+      const mediaId = message.audio?.id;
+
+
+      if (!mediaId) {
+        await enviarWhatsApp(from, 'No pude leer el audio recibido.');
+        return;
+      }
+
+
+      await enviarWhatsApp(from, '🎙️ Transcribiendo audio...');
+      texto = await transcribirAudioWhatsApp(mediaId);
+
+
+      console.log('Audio WhatsApp transcripto:', texto);
+    }
+
+
+    if (!texto) {
+      await enviarWhatsApp(from, 'Recibí tu mensaje, pero todavía no puedo procesar ese tipo de contenido.');
+      return;
+    }
+
+
+    await enviarWhatsApp(from, '⚙️ Procesando...');
+
+
+    const respuesta = await procesarTextoAgenda(texto, 'Bot WhatsApp');
+
+
+    await enviarWhatsApp(from, limpiarHtmlParaWhatsApp(respuesta));
+  } catch (error) {
+    console.error('Error procesando WhatsApp:', error);
+  }
+});
+
+
+async function enviarWhatsApp(to, text) {
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    throw new Error('Faltan variables WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID');
+  }
+
+
+  const limpio = String(text || '').substring(0, 4096);
+
+
+  const res = await fetch(
+    `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to,
+        type: 'text',
+        text: {
+          body: limpio,
+        },
+      }),
+    }
+  );
+
+
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Error enviando WhatsApp: ${res.status} - ${txt}`);
+  }
+
+
+  return await res.json();
+}
+
+
+async function transcribirAudioWhatsApp(mediaId) {
+  const mediaUrlResp = await fetch(`https://graph.facebook.com/v18.0/${mediaId}`, {
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+    },
+  });
+
+
+  if (!mediaUrlResp.ok) {
+    const txt = await mediaUrlResp.text();
+    throw new Error(`No pude obtener URL del audio WhatsApp: ${mediaUrlResp.status} - ${txt}`);
+  }
+
+
+  const mediaData = await mediaUrlResp.json();
+
+
+  if (!mediaData.url) {
+    throw new Error('Meta no devolvió URL del audio');
+  }
+
+
+  const audioResp = await fetch(mediaData.url, {
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+    },
+  });
+
+
+  if (!audioResp.ok) {
+    const txt = await audioResp.text();
+    throw new Error(`No pude descargar audio WhatsApp: ${audioResp.status} - ${txt}`);
+  }
+
+
+  const buffer = Buffer.from(await audioResp.arrayBuffer());
+  const tmpPath = path.join(os.tmpdir(), `whatsapp_audio_${Date.now()}.ogg`);
+
+
+  fs.writeFileSync(tmpPath, buffer);
+
+
+  try {
+    const transcripcion = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tmpPath),
+      model: 'whisper-1',
+      language: 'es',
+    });
+
+
+    return limpiarTexto(transcripcion.text || '');
+  } finally {
+    if (fs.existsSync(tmpPath)) {
+      fs.unlinkSync(tmpPath);
+    }
+  }
+}
+
+
+// =========================
+// TELEGRAM
+// =========================
+
+
 async function enviarHtml(chatId, html) {
   await bot.sendMessage(chatId, html, { parse_mode: 'HTML' });
 }
+
+
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  let texto = '';
+
+
+  try {
+    if (msg.voice) {
+      await bot.sendMessage(chatId, '🎙️ Transcribiendo...');
+      texto = await transcribirAudioTelegram(msg.voice.file_id);
+
+
+      if (!texto) {
+        await bot.sendMessage(chatId, 'No pude entender el audio. Probá de nuevo.');
+        return;
+      }
+
+
+      await bot.sendMessage(chatId, `📝 Entendí: "${texto}"`);
+    } else if (msg.text === '/start') {
+      await enviarHtml(
+        chatId,
+        '<b>Bot de agenda activo ✅</b>\n\nComandos:\n/hoy\n/semana\n/resumen'
+      );
+      return;
+    } else if (msg.text === '/hoy') {
+      const calendar = await getCalendarClient();
+      const respuesta = await agendaHoy(calendar);
+      await enviarHtml(chatId, respuesta);
+      return;
+    } else if (msg.text === '/semana') {
+      const calendar = await getCalendarClient();
+      const respuesta = await agendaSemana(calendar);
+      await enviarHtml(chatId, respuesta);
+      return;
+    } else if (msg.text === '/resumen') {
+      await enviarResumenDiario();
+      await bot.sendMessage(chatId, '✅ Resumen enviado');
+      return;
+    } else if (msg.text && !msg.text.startsWith('/')) {
+      texto = limpiarTexto(msg.text);
+    }
+
+
+    if (!texto) return;
+
+
+    await bot.sendMessage(chatId, '⚙️ Procesando...');
+
+
+    const respuesta = await procesarTextoAgenda(texto, 'Bot Telegram');
+
+
+    await bot.sendMessage(chatId, respuesta);
+  } catch (err) {
+    console.error('Error general Telegram:', err);
+    await bot.sendMessage(chatId, '❌ No pude procesar eso.');
+  }
+});
+
+
+// =========================
+// RESUMEN DIARIO
+// =========================
 
 
 async function enviarResumenDiario() {
@@ -755,131 +1060,18 @@ cron.schedule(
 );
 
 
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  let texto = '';
+// =========================
+// SERVER
+// =========================
 
 
-  try {
-    if (msg.voice) {
-      await bot.sendMessage(chatId, '🎙️ Transcribiendo...');
-      texto = await transcribirAudioTelegram(msg.voice.file_id);
+app.get('/', (req, res) => {
+  res.send('Bot agenda Telegram + WhatsApp funcionando ✅');
+});
 
 
-      if (!texto) {
-        await bot.sendMessage(chatId, 'No pude entender el audio. Probá de nuevo.');
-        return;
-      }
-
-
-      await bot.sendMessage(chatId, `📝 Entendí: "${texto}"`);
-    } else if (msg.text === '/start') {
-      await enviarHtml(
-        chatId,
-        '<b>Bot de agenda activo ✅</b>\n\nComandos:\n/hoy\n/semana\n/resumen'
-      );
-      return;
-    } else if (msg.text === '/hoy') {
-      const calendar = await getCalendarClient();
-      const respuesta = await agendaHoy(calendar);
-      await enviarHtml(chatId, respuesta);
-      return;
-    } else if (msg.text === '/semana') {
-      const calendar = await getCalendarClient();
-      const respuesta = await agendaSemana(calendar);
-      await enviarHtml(chatId, respuesta);
-      return;
-    } else if (msg.text === '/resumen') {
-      await enviarResumenDiario();
-      await bot.sendMessage(chatId, '✅ Resumen enviado');
-      return;
-    } else if (msg.text && !msg.text.startsWith('/')) {
-      texto = limpiarTexto(msg.text);
-    }
-
-
-    if (!texto) return;
-
-
-    await bot.sendMessage(chatId, '⚙️ Procesando...');
-    const intencion = await clasificarMensaje(texto);
-
-
-    if (intencion.tipo === 'error') {
-      await bot.sendMessage(chatId, `❌ ${intencion.motivo}`);
-      return;
-    }
-
-
-    if (intencion.tipo === 'agendar') {
-      let evento = null;
-
-
-      if (intencion.hora) {
-        const calendar = await getCalendarClient();
-        evento = await crearEvento(calendar, intencion);
-      }
-
-
-      let tareaAsana = null;
-
-
-      try {
-        tareaAsana = await crearTareaAsana(intencion);
-      } catch (e) {
-        console.error('Error creando tarea en Asana:', e.message);
-      }
-
-
-      const mensaje = `
-✅ Registrado
-
-
-📌 ${intencion.titulo}
-📅 ${intencion.fecha}
-${intencion.hora ? `🕐 ${intencion.hora}hs` : '🕐 Sin hora asignada'}
-${intencion.hora ? `⏱️ ${intencion.duracionMin || 60} min` : ''}
-${intencion.descripcion ? `📝 ${intencion.descripcion}` : ''}
-
-
-${evento ? `📅 Google Calendar: creado correctamente\n${evento.calendarLink || ''}` : '📅 Google Calendar: no se creó porque no tenía hora'}
-
-
-${tareaAsana ? '🗂️ Tarea creada en Asana' : '⚠️ No se creó en Asana'}
-      `.trim();
-
-
-      await bot.sendMessage(chatId, mensaje);
-      return;
-    }
-
-
-    const calendar = await getCalendarClient();
-
-
-    if (intencion.tipo === 'hoy') {
-      const respuesta = await agendaHoy(calendar);
-      await enviarHtml(chatId, respuesta);
-      return;
-    }
-
-
-    if (intencion.tipo === 'dia') {
-      const respuesta = await agendaDia(calendar, intencion.fecha);
-      await enviarHtml(chatId, respuesta);
-      return;
-    }
-
-
-    if (intencion.tipo === 'semana') {
-      const respuesta = await agendaSemana(calendar);
-      await enviarHtml(chatId, respuesta);
-      return;
-    }
-  } catch (err) {
-    console.error('Error general:', err);
-    await bot.sendMessage(chatId, '❌ No pude procesar eso.');
-  }
+app.listen(PORT, () => {
+  console.log(`Servidor webhook escuchando en puerto ${PORT}`);
 });
 
 
