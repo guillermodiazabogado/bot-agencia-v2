@@ -15,7 +15,9 @@
     "openai": "^6.7.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": "20.x"
   },
   "license": "ISC"
 }
+
+

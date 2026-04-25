@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+
 const TelegramBot = require('node-telegram-bot-api');
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
@@ -9,26 +10,32 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
+
 const ASANA_TOKEN = process.env.ASANA_TOKEN;
 const ASANA_PROJECT_GID = process.env.ASANA_PROJECT_GID;
 const ASANA_NOTIFY_SECTION_GID = process.env.ASANA_NOTIFY_SECTION_GID;
+
 
 const HORA_RESUMEN = process.env.HORA_RESUMEN || '07:30';
 const CALENDAR_TIMEZONE = 'America/Argentina/Buenos_Aires';
 const SCOPES = ['https://www.googleapis.com/auth/calendar'];
 
+
 if (!TELEGRAM_TOKEN) throw new Error('Falta TELEGRAM_TOKEN');
 if (!OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY');
 if (!ANTHROPIC_API_KEY) throw new Error('Falta ANTHROPIC_API_KEY');
 
+
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const claude = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+
 
 function escapeHtml(text = '') {
   return String(text)
@@ -38,13 +45,16 @@ function escapeHtml(text = '') {
     .replace(/"/g, '&quot;');
 }
 
+
 function pad2(n) {
   return String(n).padStart(2, '0');
 }
 
+
 function formatoFechaISO(date) {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 }
+
 
 function obtenerFechaRelativa(offsetDias) {
   const d = new Date();
@@ -53,17 +63,21 @@ function obtenerFechaRelativa(offsetDias) {
   return formatoFechaISO(d);
 }
 
+
 function limpiarTexto(texto = '') {
   return String(texto).trim();
 }
+
 
 function esFechaISO(valor) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(valor || ''));
 }
 
+
 function esHoraHHMM(valor) {
   return /^\d{2}:\d{2}$/.test(String(valor || ''));
 }
+
 
 function sumarMinutos(hora, minutos) {
   const [h, m] = hora.split(':').map(Number);
@@ -73,9 +87,11 @@ function sumarMinutos(hora, minutos) {
   return `${pad2(hh)}:${pad2(mm)}`;
 }
 
+
 function toArgentinaDateTime(fecha, hora) {
   return `${fecha}T${hora}:00-03:00`;
 }
+
 
 function extraerJSON(texto) {
   try {
@@ -83,9 +99,11 @@ function extraerJSON(texto) {
     const inicio = limpio.indexOf('{');
     const fin = limpio.lastIndexOf('}');
 
+
     if (inicio === -1 || fin === -1 || fin < inicio) {
       throw new Error('No se encontró JSON válido');
     }
+
 
     return JSON.parse(limpio.substring(inicio, fin + 1));
   } catch (err) {
@@ -95,28 +113,46 @@ function extraerJSON(texto) {
   }
 }
 
+
 function validarIntencion(intencion) {
   if (!intencion || typeof intencion !== 'object') {
-    throw new Error('Intención inválida');
+    throw new Error('La intención no es un objeto válido');
   }
 
+
   const tiposValidos = ['agendar', 'hoy', 'dia', 'semana', 'error'];
+
+
   if (!tiposValidos.includes(intencion.tipo)) {
     throw new Error(`Tipo inválido: ${intencion.tipo}`);
   }
 
+
   if (intencion.tipo === 'agendar') {
-    if (!limpiarTexto(intencion.titulo)) throw new Error('Falta título');
-    if (!esFechaISO(intencion.fecha)) throw new Error(`Fecha inválida: ${intencion.fecha}`);
+    if (!limpiarTexto(intencion.titulo)) {
+      throw new Error('Falta título');
+    }
+
+
+    if (!esFechaISO(intencion.fecha)) {
+      throw new Error(`Fecha inválida: ${intencion.fecha}`);
+    }
+
 
     if (intencion.hora && !esHoraHHMM(intencion.hora)) {
       throw new Error(`Hora inválida: ${intencion.hora}`);
     }
 
-    const duracion = intencion.duracionMin === undefined ? 60 : Number(intencion.duracionMin);
+
+    const duracion = intencion.duracionMin === undefined
+      ? 60
+      : Number(intencion.duracionMin);
+
+
     if (!Number.isInteger(duracion) || duracion <= 0 || duracion > 720) {
       throw new Error('Duración inválida');
     }
+
 
     intencion.titulo = limpiarTexto(intencion.titulo);
     intencion.descripcion = limpiarTexto(intencion.descripcion || '');
@@ -124,28 +160,35 @@ function validarIntencion(intencion) {
     intencion.duracionMin = duracion;
   }
 
+
   if (intencion.tipo === 'dia' && !esFechaISO(intencion.fecha)) {
     throw new Error(`Fecha inválida: ${intencion.fecha}`);
   }
+
 
   if (intencion.tipo === 'error') {
     intencion.motivo = limpiarTexto(intencion.motivo || 'No entendí la solicitud');
   }
 
+
   return intencion;
 }
+
 
 function leerJsonDesdeEnvONombre(envName, filePath) {
   if (process.env[envName]) {
     return JSON.parse(process.env[envName]);
   }
 
+
   if (fs.existsSync(filePath)) {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   }
 
+
   throw new Error(`Falta ${envName} o archivo ${filePath}`);
 }
+
 
 async function getCalendarClient() {
   const creds = leerJsonDesdeEnvONombre(
@@ -153,16 +196,20 @@ async function getCalendarClient() {
     process.env.GOOGLE_CREDS_PATH || 'credentials.json'
   );
 
+
   const token = leerJsonDesdeEnvONombre(
     'GOOGLE_TOKEN_JSON',
     process.env.GOOGLE_TOKEN_PATH || 'token.json'
   );
 
+
   const root = creds.installed || creds.web;
+
 
   if (!root?.client_id || !root?.client_secret || !root?.redirect_uris?.[0]) {
     throw new Error('Credenciales Google inválidas');
   }
+
 
   const oAuth2 = new google.auth.OAuth2(
     root.client_id,
@@ -170,10 +217,13 @@ async function getCalendarClient() {
     root.redirect_uris[0]
   );
 
+
   oAuth2.setCredentials(token);
+
 
   return google.calendar({ version: 'v3', auth: oAuth2 });
 }
+
 
 async function getEventosPorRango(calendar, inicio, fin) {
   const res = await calendar.events.list({
@@ -184,18 +234,23 @@ async function getEventosPorRango(calendar, inicio, fin) {
     orderBy: 'startTime',
   });
 
+
   return res.data.items || [];
 }
+
 
 function formatearEventosHtml(eventos, titulo) {
   if (!eventos.length) {
     return `<b>${escapeHtml(titulo)}</b>\n\nNo tenés eventos agendados 🏔️`;
   }
 
+
   let msg = `<b>${escapeHtml(titulo)}</b>\n\n`;
+
 
   for (const ev of eventos) {
     const resumen = escapeHtml(ev.summary || 'Sin título');
+
 
     if (ev.start?.dateTime) {
       const hora = new Date(ev.start.dateTime).toLocaleTimeString('es-AR', {
@@ -203,25 +258,31 @@ function formatearEventosHtml(eventos, titulo) {
         minute: '2-digit',
       });
 
+
       msg += `📌 <b>${escapeHtml(hora)}hs</b> — ${resumen}\n`;
     } else {
       msg += `📌 Todo el día — ${resumen}\n`;
     }
   }
 
+
   msg += `\n<b>${eventos.length} evento${eventos.length > 1 ? 's' : ''}</b>`;
   return msg;
 }
+
 
 async function agendaHoy(calendar) {
   const ahora = new Date();
   const inicio = new Date(ahora);
   const fin = new Date(ahora);
 
+
   inicio.setHours(0, 0, 0, 0);
   fin.setHours(23, 59, 59, 999);
 
+
   const eventos = await getEventosPorRango(calendar, inicio, fin);
+
 
   const fechaLabel = ahora.toLocaleDateString('es-AR', {
     weekday: 'long',
@@ -229,18 +290,23 @@ async function agendaHoy(calendar) {
     month: 'long',
   });
 
+
   return formatearEventosHtml(eventos, `Agenda de hoy — ${fechaLabel}`);
 }
+
 
 async function agendaDia(calendar, fechaStr) {
   const fecha = new Date(`${fechaStr}T00:00:00`);
   const inicio = new Date(fecha);
   const fin = new Date(fecha);
 
+
   inicio.setHours(0, 0, 0, 0);
   fin.setHours(23, 59, 59, 999);
 
+
   const eventos = await getEventosPorRango(calendar, inicio, fin);
+
 
   const fechaLabel = fecha.toLocaleDateString('es-AR', {
     weekday: 'long',
@@ -248,28 +314,38 @@ async function agendaDia(calendar, fechaStr) {
     month: 'long',
   });
 
+
   return formatearEventosHtml(eventos, `Agenda del ${fechaLabel}`);
 }
+
 
 async function agendaSemana(calendar) {
   const hoy = new Date();
   hoy.setHours(0, 0, 0, 0);
 
+
   const fin = new Date(hoy);
   fin.setDate(fin.getDate() + 7);
   fin.setHours(23, 59, 59, 999);
 
+
   const eventos = await getEventosPorRango(calendar, hoy, fin);
+
 
   if (!eventos.length) {
     return '<b>Agenda de los próximos 7 días</b>\n\nNo tenés eventos agendados 🏔️';
   }
 
+
   let msg = '<b>Agenda de los próximos 7 días</b>\n\n';
   let diaActual = '';
 
+
   for (const ev of eventos) {
-    const fechaEv = ev.start?.dateTime ? new Date(ev.start.dateTime) : new Date(ev.start?.date);
+    const fechaEv = ev.start?.dateTime
+      ? new Date(ev.start.dateTime)
+      : new Date(ev.start?.date);
+
 
     const diaLabel = fechaEv.toLocaleDateString('es-AR', {
       weekday: 'long',
@@ -277,12 +353,15 @@ async function agendaSemana(calendar) {
       month: 'long',
     });
 
+
     if (diaLabel !== diaActual) {
       msg += `\n<b>${escapeHtml(diaLabel)}</b>\n`;
       diaActual = diaLabel;
     }
 
+
     const resumen = escapeHtml(ev.summary || 'Sin título');
+
 
     if (ev.start?.dateTime) {
       const hora = fechaEv.toLocaleTimeString('es-AR', {
@@ -290,20 +369,25 @@ async function agendaSemana(calendar) {
         minute: '2-digit',
       });
 
+
       msg += `📌 ${escapeHtml(hora)}hs — ${resumen}\n`;
     } else {
       msg += `📌 Todo el día — ${resumen}\n`;
     }
   }
 
+
   msg += `\n<b>${eventos.length} evento${eventos.length > 1 ? 's' : ''} en total</b>`;
   return msg;
 }
 
+
 async function crearEvento(calendar, tarea) {
   if (!tarea.hora) return null;
 
+
   const horaFin = sumarMinutos(tarea.hora, tarea.duracionMin || 60);
+
 
   const event = {
     summary: tarea.titulo,
@@ -318,10 +402,12 @@ async function crearEvento(calendar, tarea) {
     },
   };
 
+
   const res = await calendar.events.insert({
     calendarId: 'primary',
     resource: event,
   });
+
 
   return {
     ...tarea,
@@ -331,11 +417,13 @@ async function crearEvento(calendar, tarea) {
   };
 }
 
+
 async function crearTareaAsana(tarea) {
   if (!ASANA_TOKEN || !ASANA_PROJECT_GID) {
     console.log('Asana no configurado para creación');
     return null;
   }
+
 
   const body = {
     data: {
@@ -345,11 +433,12 @@ async function crearTareaAsana(tarea) {
         `Fecha: ${tarea.fecha}`,
         `Hora: ${tarea.hora || 'Sin hora asignada'}`,
         `Duración: ${tarea.duracionMin || 60} min`,
-        'Origen: Bot Telegram'
+        'Origen: Bot Telegram',
       ].join('\n'),
       projects: [ASANA_PROJECT_GID],
-    }
+    },
   };
+
 
   const res = await fetch('https://app.asana.com/api/1.0/tasks', {
     method: 'POST',
@@ -361,14 +450,17 @@ async function crearTareaAsana(tarea) {
     body: JSON.stringify(body),
   });
 
+
   if (!res.ok) {
     const txt = await res.text();
     throw new Error(`Error Asana creando tarea: ${res.status} - ${txt}`);
   }
 
+
   const json = await res.json();
   return json.data;
 }
+
 
 async function obtenerTareasAsanaNotificables() {
   if (!ASANA_TOKEN || !ASANA_NOTIFY_SECTION_GID) {
@@ -376,39 +468,47 @@ async function obtenerTareasAsanaNotificables() {
     return [];
   }
 
+
   const res = await fetch(
     `https://app.asana.com/api/1.0/sections/${ASANA_NOTIFY_SECTION_GID}/tasks?opt_fields=name,completed,due_on&limit=100`,
     {
       headers: {
         Authorization: `Bearer ${ASANA_TOKEN}`,
         Accept: 'application/json',
-      }
+      },
     }
   );
+
 
   if (!res.ok) {
     const txt = await res.text();
     throw new Error(`Error leyendo sección de Asana: ${res.status} - ${txt}`);
   }
 
+
   const json = await res.json();
   return (json.data || []).filter(t => !t.completed);
 }
+
 
 function formatearTareasAsanaHtml(tareas) {
   if (!tareas.length) {
     return '<b>✅ Tareas a notificar</b>\n\nNo tenés tareas para hoy.';
   }
 
+
   let msg = '<b>✅ Tareas a notificar</b>\n\n';
+
 
   for (const t of tareas.slice(0, 10)) {
     msg += `• ${escapeHtml(t.name || 'Sin título')}\n`;
   }
 
+
   msg += `\n<b>${tareas.length} tarea${tareas.length > 1 ? 's' : ''}</b>`;
   return msg;
 }
+
 
 async function clasificarMensaje(texto) {
   const hoyTexto = new Date().toLocaleDateString('es-AR', {
@@ -418,18 +518,23 @@ async function clasificarMensaje(texto) {
     day: 'numeric',
   });
 
+
   const hoyISO = obtenerFechaRelativa(0);
   const mananaISO = obtenerFechaRelativa(1);
   const pasadoISO = obtenerFechaRelativa(2);
+
 
   const prompt = `
 Hoy es ${hoyTexto} (${hoyISO}).
 Mañana es ${mananaISO}.
 Pasado mañana es ${pasadoISO}.
 
+
 El usuario manda: "${texto}".
 
+
 Tu tarea es clasificar la intención para un asistente de agenda y tareas.
+
 
 Reglas:
 - Si el usuario pide agendar, crear recordatorio, reunión, llamada, turno o tarea con fecha, devolvé tipo "agendar".
@@ -444,6 +549,7 @@ Reglas:
 - No agregues texto antes ni después.
 - No uses markdown.
 
+
 Formatos válidos:
 {"tipo":"agendar","titulo":"...","fecha":"YYYY-MM-DD","hora":"HH:MM","duracionMin":60,"descripcion":"..."}
 {"tipo":"agendar","titulo":"...","fecha":"YYYY-MM-DD","hora":null,"duracionMin":60,"descripcion":"..."}
@@ -452,6 +558,7 @@ Formatos válidos:
 {"tipo":"semana"}
 {"tipo":"error","motivo":"..."}
 `.trim();
+
 
   const resp = await claude.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -464,73 +571,42 @@ Formatos válidos:
     ],
   });
 
+
   const textoRespuesta = resp.content?.[0]?.text || '';
   const json = extraerJSON(textoRespuesta);
   return validarIntencion(json);
 }
 
-  if (!intencion || typeof intencion !== 'object') {
-    throw new Error('La intención no es un objeto válido');
-  }
-
-  const tiposValidos = ['agendar', 'hoy', 'dia', 'semana', 'error'];
-  if (!tiposValidos.includes(intencion.tipo)) {
-    throw new Error(`Tipo inválido: ${intencion.tipo}`);
-  }
-
-  if (intencion.tipo === 'agendar') {
-    if (!limpiarTexto(intencion.titulo)) throw new Error('Falta título');
-    if (!esFechaISO(intencion.fecha)) throw new Error(`Fecha inválida: ${intencion.fecha}`);
-
-    if (intencion.hora && !esHoraHHMM(intencion.hora)) {
-      throw new Error(`Hora inválida: ${intencion.hora}`);
-    }
-
-    const duracion = intencion.duracionMin === undefined ? 60 : Number(intencion.duracionMin);
-
-    if (!Number.isInteger(duracion) || duracion <= 0 || duracion > 720) {
-      throw new Error('Duración inválida');
-    }
-
-    intencion.titulo = limpiarTexto(intencion.titulo);
-    intencion.descripcion = limpiarTexto(intencion.descripcion || '');
-    intencion.hora = intencion.hora ? limpiarTexto(intencion.hora) : null;
-    intencion.duracionMin = duracion;
-  }
-
-  if (intencion.tipo === 'dia' && !esFechaISO(intencion.fecha)) {
-    throw new Error(`Fecha inválida: ${intencion.fecha}`);
-  }
-
-  if (intencion.tipo === 'error') {
-    intencion.motivo = limpiarTexto(intencion.motivo || 'No entendí la solicitud');
-  }
-
-  return intencion;
-}
 
 async function descargarArchivoTelegram(filePath) {
   const url = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
   const res = await fetch(url);
 
+
   if (!res.ok) {
     throw new Error(`No pude descargar el archivo de Telegram: HTTP ${res.status}`);
   }
 
+
   return Buffer.from(await res.arrayBuffer());
 }
 
+
 async function transcribirAudioTelegram(fileId) {
   const fileInfo = await bot.getFile(fileId);
+
 
   if (!fileInfo?.file_path) {
     throw new Error('Telegram no devolvió file_path para el audio');
   }
 
+
   const buffer = await descargarArchivoTelegram(fileInfo.file_path);
   const tmpPath = path.join(os.tmpdir(), `audio_${Date.now()}.ogg`);
 
+
   fs.writeFileSync(tmpPath, buffer);
+
 
   try {
     const transcripcion = await openai.audio.transcriptions.create({
@@ -538,6 +614,7 @@ async function transcribirAudioTelegram(fileId) {
       model: 'whisper-1',
       language: 'es',
     });
+
 
     return limpiarTexto(transcripcion.text || '');
   } finally {
@@ -547,9 +624,11 @@ async function transcribirAudioTelegram(fileId) {
   }
 }
 
+
 async function enviarHtml(chatId, html) {
   await bot.sendMessage(chatId, html, { parse_mode: 'HTML' });
 }
+
 
 async function enviarResumenDiario() {
   try {
@@ -558,10 +637,13 @@ async function enviarResumenDiario() {
       return;
     }
 
+
     const calendar = await getCalendarClient();
     const agenda = await agendaHoy(calendar);
 
+
     let bloqueAsana = '<b>✅ Tareas a notificar</b>\n\nNo pude leer Asana.';
+
 
     try {
       const tareas = await obtenerTareasAsanaNotificables();
@@ -570,6 +652,7 @@ async function enviarResumenDiario() {
       console.error('Error Asana resumen:', err.message);
     }
 
+
     const mensaje = [
       '<b>🌅 Buenos días Guille</b>',
       '',
@@ -577,8 +660,9 @@ async function enviarResumenDiario() {
       '',
       bloqueAsana,
       '',
-      'Buen día 💪'
+      'Buen día 💪',
     ].join('\n');
+
 
     await enviarHtml(TELEGRAM_CHAT_ID, mensaje);
   } catch (err) {
@@ -586,7 +670,9 @@ async function enviarResumenDiario() {
   }
 }
 
+
 const [horaCron, minutoCron] = HORA_RESUMEN.split(':');
+
 
 cron.schedule(
   `${Number(minutoCron)} ${Number(horaCron)} * * *`,
@@ -597,19 +683,23 @@ cron.schedule(
   { timezone: CALENDAR_TIMEZONE }
 );
 
+
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   let texto = '';
+
 
   try {
     if (msg.voice) {
       await bot.sendMessage(chatId, '🎙️ Transcribiendo...');
       texto = await transcribirAudioTelegram(msg.voice.file_id);
 
+
       if (!texto) {
         await bot.sendMessage(chatId, 'No pude entender el audio. Probá de nuevo.');
         return;
       }
+
 
       await bot.sendMessage(chatId, `📝 Entendí: "${texto}"`);
     } else if (msg.text === '/start') {
@@ -636,25 +726,32 @@ bot.on('message', async (msg) => {
       texto = limpiarTexto(msg.text);
     }
 
+
     if (!texto) return;
+
 
     await bot.sendMessage(chatId, '⚙️ Procesando...');
     const intencion = await clasificarMensaje(texto);
+
 
     if (intencion.tipo === 'error') {
       await bot.sendMessage(chatId, `❌ ${intencion.motivo}`);
       return;
     }
 
+
     if (intencion.tipo === 'agendar') {
       let evento = null;
+
 
       if (intencion.hora) {
         const calendar = await getCalendarClient();
         evento = await crearEvento(calendar, intencion);
       }
 
+
       let tareaAsana = null;
+
 
       try {
         tareaAsana = await crearTareaAsana(intencion);
@@ -662,8 +759,10 @@ bot.on('message', async (msg) => {
         console.error('Error creando tarea en Asana:', e.message);
       }
 
+
       const mensaje = `
 ✅ Registrado
+
 
 📌 ${intencion.titulo}
 📅 ${intencion.fecha}
@@ -671,16 +770,21 @@ ${intencion.hora ? `🕐 ${intencion.hora}hs` : '🕐 Sin hora asignada'}
 ${intencion.hora ? `⏱️ ${intencion.duracionMin || 60} min` : ''}
 ${intencion.descripcion ? `📝 ${intencion.descripcion}` : ''}
 
+
 ${evento ? `📅 Google Calendar: creado correctamente\n${evento.calendarLink || ''}` : '📅 Google Calendar: no se creó porque no tenía hora'}
+
 
 ${tareaAsana ? '🗂️ Tarea creada en Asana' : '⚠️ No se creó en Asana'}
       `.trim();
+
 
       await bot.sendMessage(chatId, mensaje);
       return;
     }
 
+
     const calendar = await getCalendarClient();
+
 
     if (intencion.tipo === 'hoy') {
       const respuesta = await agendaHoy(calendar);
@@ -688,11 +792,13 @@ ${tareaAsana ? '🗂️ Tarea creada en Asana' : '⚠️ No se creó en Asana'}
       return;
     }
 
+
     if (intencion.tipo === 'dia') {
       const respuesta = await agendaDia(calendar, intencion.fecha);
       await enviarHtml(chatId, respuesta);
       return;
     }
+
 
     if (intencion.tipo === 'semana') {
       const respuesta = await agendaSemana(calendar);
@@ -705,5 +811,8 @@ ${tareaAsana ? '🗂️ Tarea creada en Asana' : '⚠️ No se creó en Asana'}
   }
 });
 
+
 console.log('Bot corriendo 🚀');
 console.log(`Resumen diario programado para las ${HORA_RESUMEN}`);
+
+
