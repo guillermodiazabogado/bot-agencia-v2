@@ -36,6 +36,7 @@ if (!TELEGRAM_TOKEN) throw new Error('Falta TELEGRAM_TOKEN');
 if (!OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY');
 if (!ANTHROPIC_API_KEY) {
   console.warn('⚠️ Falta ANTHROPIC_API_KEY: la IA no va a funcionar.');
+} 
 
 
 const app = express();
